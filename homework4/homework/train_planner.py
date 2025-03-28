@@ -90,7 +90,7 @@ def train(
         print(f"Epoch {epoch+1}/{num_epochs}] Loss: {total_loss / len(loader):.4f}")
 
     save_path = save_model(model)
-    print(f"✅ Model saved to {save_path}")
+    print(f"Model saved to {save_path}")
 
 
 if __name__ == "__main__":
