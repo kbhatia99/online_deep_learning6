@@ -140,23 +140,24 @@ class CNNPlanner(nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
 
-        # Simple CNN backbone
+        # Simple CNN backbone with a large kernel in the first layer
         self.backbone = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=5, stride=2, padding=2),  # -> (b, 32, h/2, w/2)
+            nn.Conv2d(3, 16, kernel_size=11, stride=2, padding=5),  # -> (b, 32, h/2, w/2)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),  # -> (b, 64, h/4, w/4)
+            nn.Conv2d(16, 32, kernel_size=5, stride=2, padding=2),  # -> (b, 64, h/4, w/4)
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # -> (b, 128, h/8, w/8)
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # -> (b, 128, h/8, w/8)
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),  # -> (b, 128, 1, 1)
+            nn.AdaptiveAvgPool2d((1, 1)),  # -> (b, 64, 1, 1)
         )
 
         # Fully connected head to predict waypoints
         self.fc = nn.Sequential(
             nn.Flatten(),  # -> (b, 128)
-            nn.Linear(128, 128),
+            nn.Linear(64, 64),
             nn.ReLU(),
-            nn.Linear(128, n_waypoints * 2)  # output is (x, y) pairs
+            nn.Dropout(0.3), 
+            nn.Linear(64, n_waypoints * 2)  # output is (x, y) pairs
         )
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:

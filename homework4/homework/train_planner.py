@@ -24,23 +24,15 @@ class TrackWaypointDataset(Dataset):
             torch.tensor(entry['waypoints_mask'], dtype=torch.bool),
         )
 
-def masked_mse_loss(pred, target, mask):
+def mixed_loss(pred, target, mask, alpha=0.5):
     """
-    Compute mean squared error (L2) only on valid waypoints (mask == True).
-    """
-    mask = mask.unsqueeze(-1)
-    diff = (pred - target) * mask
-    loss = (diff ** 2).sum() / (mask.sum() + 1e-6)
-    return loss
-
-def masked_l1_loss(pred, target, mask):
-    """
-    Compute mean absolute error (L1) only on valid waypoints (mask == True).
+    Mix of L1 and L2 loss, weighted by alpha.
     """
     mask = mask.unsqueeze(-1)
     diff = (pred - target) * mask
-    loss = diff.abs().sum() / (mask.sum() + 1e-6)
-    return loss
+    l1 = diff.abs().sum() / (mask.sum() + 1e-6)
+    l2 = (diff ** 2).sum() / (mask.sum() + 1e-6)
+    return alpha * l2 + (1 - alpha) * l1
 
 def train(
     model_name="mlp_planner",
@@ -50,7 +42,7 @@ def train(
     lr=1e-3,
     num_workers=4,
     batch_size=64,
-    weight_factor=1e-4,  # Regularization weight
+    weight_factor=5e-5,  # L2 regularization strength
 ):
     loader = load_data(
         dataset_path=dataset_path,
@@ -77,10 +69,10 @@ def train(
             else:
                 pred = model(track_left=data["track_left"], track_right=data["track_right"])
 
-            # Use L1 loss + L2 regularization
-            loss = masked_l1_loss(pred, data["waypoints"], data["waypoints_mask"])
-            l2_reg = sum((param ** 2).sum() for param in model.parameters())
-            loss = loss + weight_factor * l2_reg
+            # Combined loss + L2 regularization
+            loss = mixed_loss(pred, data["waypoints"], data["waypoints_mask"], alpha=0.5)
+            l2_reg = sum((p ** 2).sum() for p in model.parameters())
+            loss += weight_factor * l2_reg
 
             optimizer.zero_grad()
             loss.backward()
