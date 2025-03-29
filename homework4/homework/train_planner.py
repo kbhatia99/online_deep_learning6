@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader, Dataset
 from .models import load_model, save_model
 from homework.datasets.road_dataset import load_data
 from torch.nn import functional as F
+from .metrics import PlannerMetric
 
 class TrackWaypointDataset(Dataset):
     def __init__(self, data_list, n_track=10, n_waypoints=3):
@@ -24,15 +25,14 @@ class TrackWaypointDataset(Dataset):
             torch.tensor(entry['waypoints_mask'], dtype=torch.bool),
         )
 
-def mixed_loss(pred, target, mask, alpha=0.5):
+def masked_l1_loss(pred, target, mask):
     """
-    Mix of L1 and L2 loss, weighted by alpha.
+    Compute mean absolute error (L1) only on valid waypoints (mask == True).
     """
     mask = mask.unsqueeze(-1)
     diff = (pred - target) * mask
-    l1 = diff.abs().sum() / (mask.sum() + 1e-6)
-    l2 = (diff ** 2).sum() / (mask.sum() + 1e-6)
-    return alpha * l2 + (1 - alpha) * l1
+    loss = diff.abs().sum() / (mask.sum() + 1e-6)
+    return loss
 
 def train(
     model_name="mlp_planner",
@@ -42,7 +42,7 @@ def train(
     lr=1e-3,
     num_workers=4,
     batch_size=64,
-    weight_factor=5e-5,  # L2 regularization strength
+    weight_factor=5e-5,
 ):
     loader = load_data(
         dataset_path=dataset_path,
@@ -59,7 +59,9 @@ def train(
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
+    trainmetrics = PlannerMetric()
     for epoch in range(num_epochs):
+        trainmetrics.reset()
         total_loss = 0
         for batch in loader:
             data = {k: v.cuda() for k, v in batch.items()}
@@ -68,11 +70,10 @@ def train(
                 pred = model(data["image"])
             else:
                 pred = model(track_left=data["track_left"], track_right=data["track_right"])
-
-            # Combined loss + L2 regularization
-            loss = mixed_loss(pred, data["waypoints"], data["waypoints_mask"], alpha=0.5)
+            trainmetrics.add(pred, data["waypoints"], data["waypoints_mask"])
+            loss = masked_l1_loss(pred, data["waypoints"], data["waypoints_mask"])
             l2_reg = sum((p ** 2).sum() for p in model.parameters())
-            loss += weight_factor * l2_reg
+            #loss += weight_factor * l2_reg
 
             optimizer.zero_grad()
             loss.backward()
@@ -80,10 +81,9 @@ def train(
             total_loss += loss.item()
 
         print(f"Epoch {epoch+1}/{num_epochs}] Loss: {total_loss / len(loader):.4f}")
-
+        print(f"{trainmetrics.compute()}")
     save_path = save_model(model)
     print(f"Model saved to {save_path}")
-
 
 if __name__ == "__main__":
     from random import random

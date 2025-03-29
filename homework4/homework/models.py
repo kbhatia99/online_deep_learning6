@@ -142,11 +142,17 @@ class CNNPlanner(nn.Module):
 
         # Simple CNN backbone with a large kernel in the first layer
         self.backbone = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=11, stride=2, padding=5),  # -> (b, 32, h/2, w/2)
+            nn.Conv2d(3, 16, kernel_size=16, stride=2, padding=7),  # -> (b, 32, h/2, w/2)
+            nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.Conv2d(16, 32, kernel_size=5, stride=2, padding=2),  # -> (b, 64, h/4, w/4)
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # -> (b, 128, h/8, w/8)
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),  # NEW layer → (b, 128, h/8, w/8)
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, 1)),  # -> (b, 64, 1, 1)
         )
@@ -154,7 +160,8 @@ class CNNPlanner(nn.Module):
         # Fully connected head to predict waypoints
         self.fc = nn.Sequential(
             nn.Flatten(),  # -> (b, 128)
-            nn.Linear(64, 64),
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.3), 
             nn.Linear(64, n_waypoints * 2)  # output is (x, y) pairs
