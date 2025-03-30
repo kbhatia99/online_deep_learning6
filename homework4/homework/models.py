@@ -130,57 +130,74 @@ INPUT_MEAN = [0.485, 0.456, 0.406]
 INPUT_STD = [0.229, 0.224, 0.225]
 
 class CNNPlanner(nn.Module):
-    def __init__(
-        self,
-        n_waypoints: int = 3,
-    ):
+    class Block(nn.Module):
+        def __init__(self, in_channels, out_channels, stride):
+            super().__init__()
+            kernel_size = 3
+            padding = (kernel_size - 1) // 2
+
+            self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding)
+            self.bn1 = nn.BatchNorm2d(out_channels)
+
+            self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size, 1, padding, dilation=2)
+            self.bn2 = nn.BatchNorm2d(out_channels)
+
+            self.conv3 = nn.Conv2d(out_channels, out_channels, kernel_size, 1, padding)
+            self.bn3 = nn.BatchNorm2d(out_channels)
+
+            self.act = nn.ReLU()  # Changed to ReLU
+
+        def forward(self, x):
+            x = self.act(self.bn1(self.conv1(x)))
+            x = self.act(self.bn2(self.conv2(x)))
+            x = self.act(self.bn3(self.conv3(x)))
+            return x
+
+    def __init__(self, n_waypoints=3, channels_l0=16, n_blocks=3):
         super().__init__()
         self.n_waypoints = n_waypoints
 
-        self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN), persistent=False)
-        self.register_buffer("input_std", torch.as_tensor(INPUT_STD), persistent=False)
+        self.register_buffer("input_mean", torch.as_tensor([0.485, 0.456, 0.406]), persistent=False)
+        self.register_buffer("input_std", torch.as_tensor([0.229, 0.224, 0.225]), persistent=False)
 
-        # Simple CNN backbone with a large kernel in the first layer
-        self.backbone = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=16, stride=2, padding=7),  # -> (b, 32, h/2, w/2)
-            nn.BatchNorm2d(16),
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=5, stride=2, padding=2),  # -> (b, 64, h/4, w/4)
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # -> (b, 128, h/8, w/8)
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),  # NEW layer → (b, 128, h/8, w/8)
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),  # -> (b, 64, 1, 1)
-        )
+        layers = [
+            nn.Conv2d(3, channels_l0, kernel_size=11, stride=2, padding=5),
+            nn.ReLU(),  # Initial ReLU
+        ]
 
-        # Fully connected head to predict waypoints
-        self.fc = nn.Sequential(
-            nn.Flatten(),  # -> (b, 128)
+        c1 = channels_l0
+        for _ in range(n_blocks):
+            c2 = min(c1 * 2, 128)
+            layers.append(self.Block(c1, c2, stride=2))
+            c1 = c2
+
+        self.backbone = nn.Sequential(*layers)
+
+        # OPTION: Improved head with more FC layers
+        self.head = nn.Sequential(
+            nn.Linear(c1, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
             nn.Linear(128, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.Dropout(0.3), 
-            nn.Linear(64, n_waypoints * 2)  # output is (x, y) pairs
-        )
+            nn.Linear(64, n_waypoints * 2)
+)
+
 
     def forward(self, image: torch.Tensor, **kwargs) -> torch.Tensor:
-        """
-        Args:
-            image (torch.FloatTensor): shape (b, 3, h, w), values in [0, 1]
-
-        Returns:
-            torch.FloatTensor: future waypoints with shape (b, n_waypoints, 2)
-        """
-        # Normalize image
+        # Normalize input
         x = (image - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
-        # Forward through CNN
-        x = self.backbone(x)
-        x = self.fc(x)
+        # Backbone
+        x = self.backbone(x)  # (B, C, H, W)
+
+        # Manual global average pooling: mean over H and W
+        x = x.mean(dim=-1).mean(dim=-1)  # (B, C)
+
+        # Head
+        x = self.head(x)  # (B, n_waypoints * 2)
         return x.view(x.size(0), self.n_waypoints, 2)
 
 
